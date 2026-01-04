@@ -10,4 +10,4 @@ hayro-interpret = "0.4.0"
 hayro-svg = "0.2.0"
 log = "0.4.29"
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+rfd = "0.16.0"

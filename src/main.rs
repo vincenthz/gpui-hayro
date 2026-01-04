@@ -1,8 +1,7 @@
 mod button;
 mod read_pdf;
 
-use clap::Parser;
-use std::sync::Arc;
+use std::{ops::DerefMut, sync::Arc};
 
 use button::Button;
 use gpui::{
@@ -14,36 +13,64 @@ use hayro::RenderSettings;
 use crate::read_pdf::Pdf;
 
 struct PdfRenderer {
-    pdf: read_pdf::Pdf,
-    image: Arc<Image>,
+    pdf: Option<read_pdf::Pdf>,
+    image: Option<Arc<Image>>,
     index: usize,
 }
 
 impl PdfRenderer {
     pub fn prev(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+        let Some(pdf) = &self.pdf else {
+            return;
+        };
+
         if self.index == 1 {
             return;
         }
         self.index -= 1;
-        self.image = pdf_to_image(&self.pdf, self.index - 1);
+        self.image = Some(pdf_to_image(pdf, self.index - 1));
         window.refresh();
     }
 
     pub fn next(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        if self.index >= self.pdf.nth_pages() {
+        let Some(pdf) = &self.pdf else {
+            return;
+        };
+
+        if self.index >= pdf.nth_pages() {
             return;
         }
         self.index += 1;
-        self.image = pdf_to_image(&self.pdf, self.index - 1);
+        self.image = Some(pdf_to_image(pdf, self.index - 1));
         window.refresh();
     }
+
+    pub fn set_file(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        println!("Selected file: {:?}", path);
+        let pdf = read_pdf::Pdf::from_file(path).unwrap();
+        self.image = Some(pdf_to_image(&pdf, self.index - 1));
+        self.pdf = Some(pdf);
+        self.index = 1;
+        cx.refresh_windows();
+    }
+}
+
+fn prompt_for_file() -> Option<std::path::PathBuf> {
+    // Note: rfd methods are blocking, so this need to be spawn in a background task to remain responsive
+    rfd::FileDialog::new()
+        .set_title("Select a file to open")
+        .add_filter("Pdf Files", &["pdf"])
+        .add_filter("All Files", &["*"])
+        .pick_file()
 }
 
 impl Render for PdfRenderer {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let source = ImageSource::Image(self.image.clone());
-        let i = gpui::img(source);
-        let nb_pages = self.pdf.nth_pages();
+        let nb_pages = if let Some(pdf) = &self.pdf {
+            pdf.nth_pages()
+        } else {
+            0
+        };
         div()
             .flex()
             .flex_col()
@@ -62,6 +89,23 @@ impl Render for PdfRenderer {
                     .flex()
                     .gap_2()
                     .child(
+                        Button::new("open-file-button", "Open File".into()).on_click(_cx.listener(
+                            |_this, _event, _win, cx| {
+                                let this = cx.weak_entity();
+                                let app = cx.deref_mut();
+                                app.spawn(async move |cx| {
+                                    if let Some(path) = prompt_for_file() {
+                                        this.update(cx, |this, cx| this.set_file(path, cx))
+                                            .unwrap();
+                                    } else {
+                                        println!("Dialog cancelled");
+                                    }
+                                })
+                                .detach();
+                            },
+                        )),
+                    )
+                    .child(
                         Button::new("prev", "<".into())
                             .on_click(_cx.listener(|this, _, win, cx| this.prev(win, cx))),
                     )
@@ -71,7 +115,11 @@ impl Render for PdfRenderer {
                             .on_click(_cx.listener(|this, _, win, cx| this.next(win, cx))),
                     ),
             )
-            .child(div().child(i))
+            .when_some(self.image.clone(), |this, image| {
+                let source = ImageSource::Image(image);
+                let i = gpui::img(source);
+                this.child(div().child(i))
+            })
     }
 }
 
@@ -89,18 +137,7 @@ fn pdf_to_image(pdf: &Pdf, index: usize) -> Arc<Image> {
     image
 }
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-pub struct Args {
-    name: String,
-}
-
 fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
-
-    let pdf = read_pdf::Pdf::from_file(&args.name)?;
-    let image = pdf_to_image(&pdf, 0);
-
     Application::new().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(900.), px(1200.0)), cx);
         cx.open_window(
@@ -110,8 +147,8 @@ fn main() -> anyhow::Result<()> {
             },
             |_, cx| {
                 cx.new(|_| PdfRenderer {
-                    pdf,
-                    image,
+                    pdf: None,
+                    image: None,
                     index: 1,
                 })
             },
