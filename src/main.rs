@@ -55,13 +55,15 @@ impl PdfRenderer {
     }
 }
 
-fn prompt_for_file() -> Option<std::path::PathBuf> {
-    // Note: rfd methods are blocking, so this need to be spawn in a background task to remain responsive
-    rfd::FileDialog::new()
+async fn prompt_for_file() -> Option<std::path::PathBuf> {
+    let file = rfd::AsyncFileDialog::new()
         .set_title("Select a file to open")
         .add_filter("Pdf Files", &["pdf"])
         .add_filter("All Files", &["*"])
         .pick_file()
+        .await;
+
+    file.map(|x| x.path().to_path_buf())
 }
 
 impl Render for PdfRenderer {
@@ -94,7 +96,7 @@ impl Render for PdfRenderer {
                                 let this = cx.weak_entity();
                                 let app = cx.deref_mut();
                                 app.spawn(async move |cx| {
-                                    if let Some(path) = prompt_for_file() {
+                                    if let Some(path) = prompt_for_file().await {
                                         this.update(cx, |this, cx| this.set_file(path, cx))
                                             .unwrap();
                                     } else {
