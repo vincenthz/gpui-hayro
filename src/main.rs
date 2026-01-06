@@ -16,7 +16,10 @@ struct PdfRenderer {
     pdf: Option<read_pdf::Pdf>,
     image: Option<Arc<Image>>,
     index: usize,
+    scale: f32,
 }
+
+const USE_SVG: bool = false;
 
 impl PdfRenderer {
     pub fn prev(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
@@ -28,7 +31,7 @@ impl PdfRenderer {
             return;
         }
         self.index -= 1;
-        self.image = Some(pdf_to_image(pdf, self.index - 1));
+        self.image = Some(pdf_to_image(pdf, self.index - 1, self.scale));
         window.refresh();
     }
 
@@ -41,17 +44,39 @@ impl PdfRenderer {
             return;
         }
         self.index += 1;
-        self.image = Some(pdf_to_image(pdf, self.index - 1));
+        self.image = Some(pdf_to_image(pdf, self.index - 1, self.scale));
         window.refresh();
     }
 
     pub fn set_file(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
         println!("Selected file: {:?}", path);
         let pdf = read_pdf::Pdf::from_file(path).unwrap();
-        self.image = Some(pdf_to_image(&pdf, self.index - 1));
+        self.image = Some(pdf_to_image(&pdf, self.index - 1, self.scale));
         self.pdf = Some(pdf);
         self.index = 1;
         cx.refresh_windows();
+    }
+
+    pub fn zoom_plus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pdf) = &self.pdf else {
+            return;
+        };
+
+        self.scale += 0.1;
+        println!("scale: {}", self.scale);
+        self.image = Some(pdf_to_image(&pdf, self.index - 1, self.scale));
+        window.refresh();
+    }
+
+    pub fn zoom_minus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pdf) = &self.pdf else {
+            return;
+        };
+
+        self.scale -= 0.1;
+        println!("scale: {}", self.scale);
+        self.image = Some(pdf_to_image(&pdf, self.index - 1, self.scale));
+        window.refresh();
     }
 }
 
@@ -79,16 +104,19 @@ impl Render for PdfRenderer {
             .gap_3()
             .bg(rgb(0x505050))
             .size_full()
-            .justify_center()
-            .items_center()
+            //.justify_center()
+            .items_start()
             .shadow_lg()
-            .border_1()
-            .border_color(rgb(0x0000ff))
+            //.border_1()
+            //.border_color(rgb(0x0000ff))
             .text_xl()
             .text_color(rgb(0xffffff))
             .child(
                 div()
+                    .w_full()
                     .flex()
+                    .justify_center()
+                    .items_center()
                     .gap_2()
                     .child(
                         Button::new("open-file-button", "Open File".into()).on_click(_cx.listener(
@@ -115,28 +143,48 @@ impl Render for PdfRenderer {
                     .child(
                         Button::new("next", ">".into())
                             .on_click(_cx.listener(|this, _, win, cx| this.next(win, cx))),
+                    )
+                    .child(
+                        Button::new("minus", "-".into())
+                            .on_click(_cx.listener(|this, _, win, cx| this.zoom_minus(win, cx))),
+                    )
+                    .child(
+                        Button::new("plus", "+".into())
+                            .on_click(_cx.listener(|this, _, win, cx| this.zoom_plus(win, cx))),
                     ),
             )
             .when_some(self.image.clone(), |this, image| {
                 let source = ImageSource::Image(image);
-                let i = gpui::img(source);
-                this.child(div().child(i))
+                let i = gpui::img(source)
+                    //.w(gpui::relative(1.))
+                    //.max_w(px(900.))
+                    //.h(px(1000.))
+                    .w_full()
+                    .h_full()
+                    //.h(gpui::relative(0.8))
+                    .object_fit(gpui::ObjectFit::Cover);
+                this.child(div().child(i.bg(rgb(0xffffff))))
             })
     }
 }
 
-fn pdf_to_image(pdf: &Pdf, index: usize) -> Arc<Image> {
-    let scale = 1.3;
+fn pdf_to_image(pdf: &Pdf, index: usize, scale: f32) -> Arc<Image> {
     let page = &pdf.pages()[index];
-    let render_settings = RenderSettings {
-        x_scale: scale,
-        y_scale: scale,
-        ..RenderSettings::default()
+    let image = if USE_SVG {
+        let svg = read_pdf::render_page_svg(pdf.interpreter_settings(), page);
+        let image = Image::from_bytes(ImageFormat::Svg, svg);
+        image
+    } else {
+        let render_settings = RenderSettings {
+            x_scale: scale,
+            y_scale: scale,
+            ..RenderSettings::default()
+        };
+        let png = read_pdf::render_page_png(pdf.interpreter_settings(), &render_settings, page);
+        let image = Image::from_bytes(ImageFormat::Png, png);
+        image
     };
-    let png = read_pdf::render_page(pdf.interpreter_settings(), &render_settings, page);
-    let image = Image::from_bytes(ImageFormat::Png, png);
-    let image = Arc::new(image);
-    image
+    Arc::new(image)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -152,6 +200,7 @@ fn main() -> anyhow::Result<()> {
                     pdf: None,
                     image: None,
                     index: 1,
+                    scale: 2.0,
                 })
             },
         )

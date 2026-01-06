@@ -3,6 +3,7 @@ use hayro_interpret::{
     InterpreterSettings,
     hayro_syntax::page::{Page, Pages},
 };
+use hayro_svg::convert;
 use std::{path::Path, sync::Arc};
 
 pub struct Pdf(hayro::Pdf, InterpreterSettings);
@@ -30,11 +31,15 @@ impl Pdf {
     }
 }
 
-pub fn render_page<'a>(
+pub fn render_page_png<'a>(
     interpreter_settings: &InterpreterSettings,
     render_settings: &RenderSettings,
     page: &Page<'a>,
 ) -> Vec<u8> {
     let pixmap = render(page, interpreter_settings, render_settings);
     pixmap.take_png()
+}
+
+pub fn render_page_svg<'a>(interpreter_settings: &InterpreterSettings, page: &Page<'a>) -> Vec<u8> {
+    convert(page, interpreter_settings).as_bytes().to_vec()
 }
